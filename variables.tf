@@ -11,7 +11,7 @@ variable "cidr_block" {
 }
 
 variable "private_subnets" {
-  type = number
+  type = list(string)
 }
 
 variable "database" {
@@ -19,10 +19,6 @@ variable "database" {
 }
 
 variable "artifact_location" {
-  type = string
-}
-
-variable "domain" {
   type = string
 }
 

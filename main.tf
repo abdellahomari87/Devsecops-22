@@ -11,13 +11,14 @@ data "aws_availability_zones" "all" {
 }
 
 resource "aws_subnet" "private_subnet" {
-  count             = var.private_subnets
+  count             = 2
   vpc_id            = aws_vpc.dev_vpc.id
-  cidr_block        = cidrsubnet(var.cidr_block, 4, count.index + 1)
-  availability_zone = element(data.aws_availability_zones.all.names, count.index % length(data.aws_availability_zones.all.names))
+  cidr_block        = var.private_subnets[count.index]
+  availability_zone = element(["us-east-1a", "us-east-1b"], count.index)
+  map_public_ip_on_launch = false
 
   tags = {
-    Name = "${aws_vpc.dev_vpc.id}-Private subnet ${count.index + 1}"
+    Name = "private-subnet-${count.index + 1}"
   }
 }
 
@@ -77,7 +78,7 @@ resource "aws_route_table" "private_route_table" {
 }
 
 resource "aws_route_table_association" "private_route_table_association" {
-  count          = var.private_subnets
+  count          = 2
   subnet_id      = aws_subnet.private_subnet[count.index].id
   route_table_id = aws_route_table.private_route_table.id
 }
@@ -129,7 +130,7 @@ resource "aws_rds_cluster" "aurora_cluster" {
   cluster_identifier            = "serverless-cluster"
   engine                        = "aurora-mysql"
   engine_mode                   = "provisioned"
-  engine_version                = "8.0.mysql_aurora.3.02.0"
+  engine_version                = "8.0.mysql_aurora.3.08.1"
   database_name                 = "webapp"
   db_subnet_group_name          = aws_db_subnet_group.private_db_subnet_group.name
   vpc_security_group_ids        = [aws_security_group.db-sg.id]
@@ -328,13 +329,12 @@ resource "aws_iam_role_policy_attachment" "role_attachment" {
 }
 
 resource "aws_lambda_function" "api_lambda" {
-  filename         = var.artifact_location
   function_name    = "serverless_api"
   role             = aws_iam_role.lambda_s3_aurora.arn
   handler          = "index.handler"
-  source_code_hash = filebase64sha256(var.artifact_location)
-
-  runtime = "nodejs16.x"
+  runtime          = "nodejs18.x"
+  filename         = "lambda/function.zip"
+  source_code_hash = filebase64sha256("lambda/function.zip")
 
   vpc_config {
     subnet_ids         = [for s in aws_subnet.private_subnet : s.id]
@@ -807,41 +807,4 @@ resource "aws_api_gateway_deployment" "my_api_gateway_deployment" {
   }
 
   depends_on = [aws_api_gateway_integration.any_product_image_integration]
-}
-
-data "aws_acm_certificate" "ssl_certificate" {
-  domain   = var.domain
-  statuses = ["ISSUED"]
-}
-
-resource "aws_api_gateway_domain_name" "domain" {
-  domain_name              = var.domain
-  regional_certificate_arn = data.aws_acm_certificate.ssl_certificate.arn
-
-  endpoint_configuration {
-    types = ["REGIONAL"]
-  }
-}
-
-data "aws_route53_zone" "zone" {
-  name = var.domain
-}
-
-# Route53 is not specifically required; any DNS host can be used.
-resource "aws_route53_record" "a_record" {
-  name    = aws_api_gateway_domain_name.domain.domain_name
-  type    = "A"
-  zone_id = data.aws_route53_zone.zone.id
-
-  alias {
-    evaluate_target_health = true
-    name                   = aws_api_gateway_domain_name.domain.regional_domain_name
-    zone_id                = aws_api_gateway_domain_name.domain.regional_zone_id
-  }
-}
-
-resource "aws_api_gateway_base_path_mapping" "path_mapping" {
-  api_id      = aws_api_gateway_rest_api.api_gateway.id
-  stage_name  = aws_api_gateway_deployment.my_api_gateway_deployment.stage_name
-  domain_name = aws_api_gateway_domain_name.domain.domain_name
 }
